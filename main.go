@@ -63,32 +63,38 @@ func (tor TorInstance) Stop() {
 	os.RemoveAll(tor.data_dir)
 }
 
-func GetBestFormats(vid_id string) (vid_format string, aud_format string) {
+func GetBestFormats(vid_id string) (vid_format string, aud_format string, tor TorInstance) {
 	for {
-		vid_format, aud_format, err := _GetBestFormats(vid_id)
+		vid_format, aud_format, tor, err := _GetBestFormats(vid_id)
 		if err == nil {
-			return vid_format, aud_format
+			return vid_format, aud_format, tor
 		} else {
 			println(err)
 		}
 	}
 }
 
-func _GetBestFormats(vid_id string) (vid_format string, aud_format string, err error) {
-	tor := StartTor()
-	defer tor.Stop()
+func _GetBestFormats(vid_id string) (vid_format string, aud_format string, tor TorInstance, err error) {
+	tor = StartTor()
+	defer func() {
+		if err != nil {
+			tor.Stop()
+		}
+	}()
 
 	cmd := exec.CommandContext(context.Background(), "youtube-dl", "--proxy", "socks://127.0.0.1:" + tor.port_str, "--list-formats", vid_id)
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return vid_format, aud_format, err
+	out, _err := cmd.StdoutPipe()
+	if _err != nil {
+		err = _err
+		return
 	}
 	out_scanner := bufio.NewScanner(out)
 
 
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return vid_format, aud_format, err
+	stderr, _err := cmd.StderrPipe()
+	if _err != nil {
+		err = _err
+		return
 	}
 	go func() {
 		err_scanner := bufio.NewScanner(stderr)
@@ -98,8 +104,9 @@ func _GetBestFormats(vid_id string) (vid_format string, aud_format string, err e
 		}
 	}()
 
-	if err := cmd.Start(); err != nil {
-		return vid_format, aud_format, err
+	if _err := cmd.Start(); _err != nil {
+		err = _err
+		return
 	}
 
 	best_vid_value, best_aud_value := -1, -1
@@ -126,8 +133,9 @@ func _GetBestFormats(vid_id string) (vid_format string, aud_format string, err e
 		}
 	}
 
-	if err := cmd.Wait(); err != nil {
-		return vid_format, aud_format, err
+	if _err := cmd.Wait(); _err != nil {
+		err = _err
+		return
 	}
 
 	return
@@ -166,8 +174,11 @@ func VideoFormatValue(format string) int {
 }
 
 func main() {
-	vid_format, aud_format := GetBestFormats(os.Args[1])
+	vid_format, aud_format, tor := GetBestFormats(os.Args[1])
 	println("Best formats:")
 	println(vid_format)
 	println(aud_format)
+	println("Tor port:")
+	println(tor.port_str)
+	tor.Stop()
 }
