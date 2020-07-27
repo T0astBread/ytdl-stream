@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
 	"time"
@@ -20,14 +21,14 @@ type TorInstance struct {
 	cancel context.CancelFunc
 }
 
-func StartTor() TorInstance {
+func StartTor(ctx context.Context) TorInstance {
 	for {
 		rand.Seed(time.Now().UnixNano())
 		port := 10000 + rand.Intn(500)
 		port_str := strconv.Itoa(port)
 
 		data_dir := "tor_data_" + port_str
-		ctx, cancel := context.WithCancel(context.Background())
+		tor_ctx, cancel := context.WithCancel(ctx)
 		tor := TorInstance {
 			port,
 			port_str,
@@ -35,7 +36,7 @@ func StartTor() TorInstance {
 			cancel,
 		}
 
-		cmd := exec.CommandContext(ctx, "tor", "--HTTPTunnelPort", "0", "--SocksPort", port_str, "--DataDirectory", data_dir)
+		cmd := exec.CommandContext(tor_ctx, "tor", "--HTTPTunnelPort", "0", "--SocksPort", port_str, "--DataDirectory", data_dir)
 
 		out, err := cmd.StdoutPipe()
 		if err != nil {
@@ -52,6 +53,12 @@ func StartTor() TorInstance {
 					if strings.Contains(line, "Bootstrapped 100% (done): Done") {
 						return tor
 					}
+					// Are we done?
+					select {
+						case <-ctx.Done():
+							return tor
+						default:
+					}
 				}
 			}
 		}
@@ -63,26 +70,37 @@ func (tor TorInstance) Stop() {
 	os.RemoveAll(tor.data_dir)
 }
 
-func GetBestFormats(vid_id string) (vid_format string, aud_format string, tor TorInstance) {
+func GetBestFormats(
+	ctx context.Context,
+	vid_id string,
+) (vid_format string, aud_format string, tor TorInstance) {
 	for {
-		vid_format, aud_format, tor, err := _GetBestFormats(vid_id)
+		vid_format, aud_format, tor, err := _GetBestFormats(ctx, vid_id)
 		if err == nil {
 			return vid_format, aud_format, tor
 		} else {
 			println(err)
+			select {
+				case <-ctx.Done():
+					return vid_format, aud_format, tor
+				default:
+			}
 		}
 	}
 }
 
-func _GetBestFormats(vid_id string) (vid_format string, aud_format string, tor TorInstance, err error) {
-	tor = StartTor()
+func _GetBestFormats(
+	ctx context.Context,
+	vid_id string,
+) (vid_format string, aud_format string, tor TorInstance, err error) {
+	tor = StartTor(ctx)
 	defer func() {
 		if err != nil {
 			tor.Stop()
 		}
 	}()
 
-	cmd := exec.CommandContext(context.Background(), "youtube-dl", "--proxy", "socks://127.0.0.1:" + tor.port_str, "--list-formats", vid_id)
+	cmd := exec.CommandContext(ctx, "youtube-dl", "--proxy", "socks://127.0.0.1:" + tor.port_str, "--list-formats", vid_id)
 	out, _err := cmd.StdoutPipe()
 	if _err != nil {
 		err = _err
@@ -174,7 +192,27 @@ func VideoFormatValue(format string) int {
 }
 
 func main() {
-	vid_format, aud_format, tor := GetBestFormats(os.Args[1])
+	ctx, cancel := context.WithCancel(context.Background())
+
+	sig_chan := make(chan os.Signal, 1)
+	signal.Notify(sig_chan, os.Interrupt)
+
+	go func() {
+		for range sig_chan {
+			cancel()
+			return
+		}
+	}()
+
+	vid_format, aud_format, tor := GetBestFormats(ctx, os.Args[1])
+
+	select {
+		case <-ctx.Done():
+			print("Exited gracefully")
+			return
+		default:
+	}
+
 	println("Best formats:")
 	println(vid_format)
 	println(aud_format)
