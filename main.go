@@ -53,14 +53,15 @@ func StartTor(ctx context.Context) TorInstance {
 					if strings.Contains(line, "Bootstrapped 100% (done): Done") {
 						return tor
 					}
-					// Are we done?
-					select {
-						case <-ctx.Done():
-							return tor
-						default:
-					}
 				}
 			}
+		}
+
+		// Are we done?
+		select {
+			case <-ctx.Done():
+				return tor
+			default:
 		}
 	}
 }
